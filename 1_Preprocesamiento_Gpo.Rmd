@@ -1,0 +1,424 @@
+---
+title: "Assignment_2"
+author: "Gissela Cornejo, José de la Cruz, Daniel Soto"
+date: "11/2/2022"
+output: 
+  html_document:
+    collapsed: FALSE
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+## Pre-procesamiento
+
+### Instalación de paquetes necesarios
+
+```{r library}
+# For importing data an data cleaning
+library(haven)
+library(rio)
+library(tidyverse)
+# For manipulating labels
+library(sjPlot)
+library(sjlabelled)
+```
+
+### Cargando la data
+
+
+```{r joining data}
+pob_pen_raw <- read_sav("https://github.com/DanielSotoHurtado/Censo_Nacional_Penitenciario/raw/main/_data/pob_pen_sel.sav", encoding = "UTF-8")
+```
+
+* Seleccionamos las variables con las que trabajaremos
+
+```{r}
+selected_var <- c('ID_CARATULA', 'DD', 'EST_PENIT', 
+                  'GENERO', 'EDAD', 'NACIONALIDAD', 
+                  'DELITO_GENERICO', 'DELITO_ESPECIFICO', 
+                  'P104_1',
+                  'P119_1', 'P119_2', 'P119_3', 'P119_4', 'P119_5', 'P119_6',
+                  'P109_1','P109_2', 'P126', 'P127', 'P128', 'P129',
+                  'P133', 'P135', 'P136',
+                  'P216'
+                    )
+```
+
+* Creamos la base `pob_pen_sel`
+
+```{r select variables}
+pob_pen_sel <- pob_pen_raw |>
+  select(all_of(selected_var))
+```
+
+### Limpieza de la base de datos
+
+
++ En primer lugar, reemplazamos los valores de la variable con las etiquetas de los mismos para nuestras `selected_var`. Guardamos el resultado en el objeto `sel_clean`
+
+```{r}
+sel_clean <- pob_pen_sel  |> 
+  mutate(across(.cols = all_of(selected_var),
+                .fns = ~ as_label(.x)),
+         across(.cols = all_of(selected_var),
+                .fns = ~ str_replace_all(.x, "\\?", "" )),
+         across(.cols = where(is.character) & !c(EDAD),
+                .fns = as.factor))
+```
+
++ Recategorizamos `EDAD` y EDUCACIÓN `P104_1`
+
+```{r}
+sel_clean <- sel_clean |> 
+  mutate(grupo_edad = case_when(
+    between(EDAD,60,69) ~ "60-69",
+    between(EDAD,50,59) ~ "50-59",
+    between(EDAD,40,49) ~ "40-49",
+    between(EDAD,30,39) ~ "30-39",
+    between(EDAD,18,29) ~ "18-29",
+    TRUE ~ "70 a más")) |> 
+  mutate(grupo_P104_1 = fct_collapse(
+    P104_1, 
+    Sin_nivel = c('Sin nivel','Educación inicial'),
+    Primaria = c('Primaria incompleta', 'Primaria completa'),
+    Secundaria = c('Secundaria incompleta', 'Secundaria completa'),
+    Superior = c('Superior no universitaria incompleta','Superior no universitaria completa', 'Superior universitaria incompleta', 'Superior universitaria completa', 'Postgrado'))) |> 
+  mutate(grupo_P104_1 = fct_explicit_na(grupo_P104_1, na_level = "Missing"))
+                               
+```
+
++ Ahora, dicotomizamos las variables 
+
+```{r}
+sel_clean <- sel_clean |> 
+  mutate(across(.cols = c(P119_1:P119_6,P109_1, P109_2, P127, P128, P129),
+                .fns = ~ str_detect(.x, "Sí"),
+                .names = "si_{.col}")) |> 
+  mutate(si_P126 = 
+           fct_collapse(P126, 
+                        'Sí' = c('Sí, a veces', 'Sí, siempre'),
+                        'No' = c('No','No contesta' )),
+         si_P126 = str_detect(P126, "Sí")) 
+
+```
+
+
+```{#r}
+sel_clean |> 
+  group_by(grupo_P104_1) |> 
+  count(grupo_P104_1, P104_1) |> 
+  mutate(total = sum(n))
+```
+
++ Convertirmos las variables dicotomizadas `as.numeric`
+
+```{r}
+sel_clean <- sel_clean |> 
+  mutate(across(.cols = c(si_P119_1:si_P126),
+                .fns = as.numeric))
+   
+```
+
+
+```{#r}
+sel_clean <- sel_clean |> 
+  #eda(DELITO_ESPECIFICO) |> 
+  mutate(across(.cols = DELITO_ESPECIFICO,
+                .fns = ~ str_detect(.x, "ROBO AGRAVADO"),
+                .names = "RA"),
+         across(.cols = DELITO_ESPECIFICO,
+                .fns = ~ str_detect(.x, "TRAFICO ILICITO DE DROGAS"),
+                .names = "TID"),
+         across(.cols = DELITO_ESPECIFICO,
+                .fns = ~ str_detect(.x, "VIOLACION"),
+                .names = "VSM"),
+         across(.cols = DELITO_ESPECIFICO,
+                .fns = ~ str_detect(.x, "PROMOCION O FAVORECIMIENTO"),
+                .names = "PF"),
+         across(.cols = DELITO_ESPECIFICO,
+                .fns = ~ str_detect(.x, "HURTO AGRAVADO"),
+                .names = "HA"))
+
+  
+```
+
++ Creamos la variables IIAA a partir de otras 6 variables sobre pertenencia a fuerzas armadas, pnp, rondas campesinas, etc
+
+```{r}
+sel_clean <- sel_clean |> 
+  rowwise(ID_CARATULA) |>
+  mutate(IIAA = sum(c(si_P119_1, si_P119_2, 
+                      si_P119_3, si_P119_4, 
+                      si_P119_5 ,si_P119_6))) |> 
+  ungroup() |> 
+  mutate(si_IIAA = if_else(IIAA>=1, 1, 0))
+```
+
+
+```{r}
+sel_clean |> 
+  select(c(si_P119_1:si_P119_6, IIAA, si_IIAA)) |> 
+  filter(si_IIAA == TRUE) |> View()
+   
+```
+
++ A partir de la variable nivel educativo creamos 4 variables una por cada nivel educativo
+
+```{r}
+sel_clean <- sel_clean |> 
+  mutate(across(.cols = grupo_P104_1,
+                .fns = ~ str_detect(.x, "Sin_nivel"),
+                .names = "Sin_nivel"),
+         across(.cols = grupo_P104_1,
+                .fns = ~ str_detect(.x, "Primaria"),
+                .names = "Primaria"),
+         across(.cols = grupo_P104_1,
+                .fns = ~ str_detect(.x, "Secundaria"),
+                .names = "Secundaria"),
+         across(.cols = grupo_P104_1,
+                .fns = ~ str_detect(.x, "Superior"),
+                .names = "Superior"),
+         across(.cols = c(Sin_nivel, Primaria, 
+                          Secundaria, Superior ),
+                .fns = as.numeric))
+        
+sel_clean |> 
+  select(c(grupo_P104_1, 
+           Sin_nivel, Primaria, Secundaria, Superior)) |>  View()
+
+
+      
+```
+
++ Exportamos la base 
+
+```{r}
+
+#export(sel_clean, "sel_clean_F.csv")
+#readr::write_csv(sel_clean, "sel_clean_F.csv")
+write.csv(sel_clean, "sel_clean.csv", fileEncoding = "latin1")
+```
+
+
+## Análisis Exploratorio
+
+### Escribiendo una función para las variables seleccionadas
+
+```{r, include=FALSE}
+eda <- function(data, group_col){
+  
+  data |> 
+    group_by({{group_col}}) |> 
+    summarize(count = n()) |> 
+    mutate(percent = round((count / sum(count)) * 100, digits = 2)) |> 
+    arrange(desc(count)) |> 
+    drop_na()
+
+}
+
+```
+
+
+### P109_1. ¿Consumía drogas antes de ingresar al penal?
+
+  
+```{r}
+sel_clean |> 
+  filter(EST_PENIT %in% c("E.P. de Lurigancho")) |> 
+  group_by(EST_PENIT) |> 
+  count(P109_1, sort = T) |>
+  mutate(pct = n/sum(n)*100)
+
+```
+  
+### si_P109_1. Porcentaje de personas que **Sí** consumían droga antes de ingresar al penal
+  
+```{r}
+# porcentaje de personas que consumían drogas antes de ingresar al penal
+sel_clean |> 
+  #filter(EST_PENIT %in% c("E.P. de Lurigancho")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P109_1, sort = T) |>
+  mutate(pct = n/sum(n)*100) |> 
+  filter(si_P109_1 == TRUE) |> 
+  select(-si_P109_1)
+
+
+```
+
+
+### si_P109_2. Porcentaje de personas que **Sí** bebían alcohol antes de ingresar al penal
+
+```{r}
+
+sel_clean |> 
+  #filter(EST_PENIT %in% c("E.P. de Trujillo")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P109_2, sort = T) |>
+  mutate(pct = n/sum(n)*100) |> 
+  filter(si_P109_2 == TRUE) |> 
+  select(-si_P109_2)
+```
+
+### P126. ¿Sus padres o cuidadores le pegaban cuando era niño?
+
+```{r}
+sel_clean |> 
+  filter(EST_PENIT %in% c("E.P. de Trujillo")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P126, sort = T) |>
+  mutate(pct = n/sum(n)*100)
+
+```
+
+### si_P126. Sus padres o cuidadores **Sí** le pegaban cuando era niño
+
+```{r}
+sel_clean |> 
+  #filter(EST_PENIT %in% c("E.P. de Trujillo")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P126, sort = T) |>
+  mutate(pct = n/sum(n)*100)|> 
+  filter(si_P126 == TRUE) |> 
+  select(-si_P126)
+```
+
+
+### si_P127. Sus padres o cuidadores **Sí** tomaban alcohol cuando era niño
+
+```{r}
+sel_clean |> 
+  #filter(EST_PENIT %in% c("E.P. de Trujillo")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P127, sort = T) |>
+  mutate(pct = n/sum(n)*100) |> 
+  filter(si_P127 == TRUE) |> 
+  select(-si_P127)|> 
+  ungroup()
+```
+
+
+### si_P128. Sus padres o cuidadores **Sí** consumían drogas cuando era niño
+```{r}
+sel_clean |> 
+  #filter(EST_PENIT %in% c("E.P. de Trujillo")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P128, sort = T) |>
+  mutate(pct = n/sum(n)*100) |> 
+  filter(si_P128 == TRUE) |> 
+  select(-si_P128) |> 
+  ungroup()
+```
+
+```{#r}
+P127_t |> 
+  inner_join(P128_t, by = "EST_PENIT", suffix = c(".P127", ".P128")) |> 
+  inner_join(P129_t) |> View()
+
+```
+
+### si_P129. Su madre **Sí** sufrió violencia física por parte de su pareja
+  
+```{r}
+sel_clean |> 
+  #filter(EST_PENIT %in% c("E.P. de Trujillo")) |> 
+  group_by(EST_PENIT) |> 
+  count(si_P129, sort = T) |>
+  mutate(pct = n/sum(n)*100) |> 
+  filter(si_P129 == TRUE) |> 
+  select(-si_P129)
+```
+
+### 5 principales delitos por penal
+
+```{r}
+sel_clean |> 
+  filter(EST_PENIT %in% c("E.P. de Trujillo")) |>
+  group_by(EST_PENIT) |> 
+  count(EST_PENIT, DELITO_ESPECIFICO, sort = T) |> 
+  mutate(pct = n/sum(n)*100) |> 
+  top_n(10,n ) |> 
+  ggplot(aes(fct_reorder(DELITO_ESPECIFICO,n), n)) +
+  geom_col() +
+  coord_flip() +
+  theme_classic()
+
+```
+
+
+### Gráfico estado jurídico por grupo de edad
+
+
+`
+```{r}
+sel_clean |> 
+  group_by(EST_PENIT) |> 
+  count(EST_PENIT, P216) |> 
+  mutate(pct = round((n/sum(n))*100, digits = 2), total = sum(n)) |> 
+  drop_na() |> 
+  ungroup() |> 
+  arrange(desc(total)) |> 
+  top_n(40,total ) |> 
+  ggplot(aes(x = fct_reorder(EST_PENIT, total), y = total, fill = P216  )) +
+  geom_col( position = "stack") +
+  coord_flip()+
+  geom_text(aes(label=pct), position = "stack", hjust = 1)+
+     theme_minimal()
+  
+  
+```
+
+
+
+### Gráfico delito genérico
+
+```{r}
+sel_clean_2 <- sel_clean |> 
+  mutate(grupo_DELITO_GENERICO = 
+           fct_lump_min(DELITO_GENERICO, min = 1000))
+```
+
+```{r}
+sel_clean_2 |> 
+  #filter(EST_PENIT %in% c("E.P. de Lurigancho")) |> 
+  group_by(grupo_edad) |> 
+  count(grupo_edad, grupo_DELITO_GENERICO) |> 
+  mutate(pct = n/sum(n)*100) |> 
+  ggplot(aes(grupo_edad, pct, fill= grupo_DELITO_GENERICO)) +
+  geom_col(position = "fill") +
+  coord_flip() +
+  ggcharts::theme_hermit() +
+  theme(legend.position = "none")
+```
+
+### Gráfico delito específico
+
+```{r}
+sel_clean_3 <- sel_clean |> 
+  mutate(grupo_DELITO_ESPECIFICO = 
+           fct_lump_min(DELITO_ESPECIFICO, min = 2000))
+```
+
+```#{r}
+sel_clean_3 |> 
+  #filter(EST_PENIT %in% c("E.P. de Lurigancho")) |> 
+  group_by(grupo_edad) |> 
+  count(grupo_edad, grupo_DELITO_ESPECIFICO) |> 
+  mutate(pct = n/sum(n)*100) |> 
+  ggplot(aes(grupo_edad, pct, fill= grupo_DELITO_ESPECIFICO)) +
+  geom_col(position = "fill") +
+  coord_flip() +
+  ggcharts::theme_nightblue()
+  #theme(legend.position = "none")
+```

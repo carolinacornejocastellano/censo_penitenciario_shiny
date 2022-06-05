@@ -1,0 +1,247 @@
+---
+title: "Análisis Exploratorio Censo Población Penitenciaria"
+author: "Daniel Soto"
+date: "13/1/2022"
+output: 
+  html_document:
+    collapsed: FALSE
+    theme: cosmo
+    toc: yes
+    toc_float: yes
+    toc_depth: 3
+    df_print: paged
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE)
+```
+
+
+## Introducción
+
+Presentamos un breve análisis exploratorio del [censo nacional penitenciario](https://www.inei.gob.pe/media/MenuRecursivo/publicaciones_digitales/Est/Lib1364/index.html).
+
+### Fuente de datos
+
+El [Primer Censo Nacional Penitenciario](https://www.inei.gob.pe/media/MenuRecursivo/publicaciones_digitales/Est/Lib1364/index.html) fue ejecutado entre el 18 y 24 de abril del 2016 por Instituto Nacional de Estadística e Informática (INEI) en coordinación con el Ministerio de Justicia. El objetivo fue obtener información estadística sobre las características sociodemográficas y situación jurídica de la población penitenciaria de 18 años y más de edad recluida en los 66 establecimientos penitenciarios del país.
+
+
+### Instalación de paquetes necesarios
+
+```{r library}
+# For importing data an data cleaning
+library(haven)
+library(rio)
+library(tidyverse)
+# For manipulating labels
+library(sjPlot)
+library(sjlabelled)
+
+```
+
+
+### Cargando la data
+
+```{r importing data}
+
+pob_pen_raw_0 <- read_sav("01_PENALES_CARATULA.sav", encoding = "UTF-8", user_na = TRUE)
+pob_pen_raw_1 <- read_sav("01_PENALES_CAP100.sav", encoding = "UTF-8", user_na = TRUE)
+pob_pen_raw_2 <- read_sav("01_PENALES_CAP200.sav", encoding = "UTF-8", user_na = TRUE)
+# glimpse(pob_pen_raw)
+
+```
+
+```{r joining data}
+pob_pen_raw <- pob_pen_raw_0 |> 
+  inner_join(pob_pen_raw_1, by = 'ID_CARATULA') |> 
+  inner_join(pob_pen_raw_2, by = 'ID_CARATULA')
+#rm(pob_pen_raw_0, pob_pen_raw_1, pob_pen_raw_2)
+
+```
+
+* Seleccionamos las variables con las que trabajaremos
+
+```{r}
+selected_var_2 <- c('ID_CARATULA', 'DD', 'EST_PENIT', 'GENERO', 'RELIGION', 'EDAD', 'NACIONALIDAD',
+                    'DELITO_ESPECIFICO', 'P101', 'P104_1', 'P105', 'P109_1', 'P109A_1', 'P109B_1',
+                    'P109C_1', 'P109D_1','P109_2', 'P109A_2', 'P109B_2', 'P109D_2','P110','P112', 'P114', 
+                    'P117', 'P118', 'P120','P119_1', 'P119_2', 'P119_3', 'P119_4', 'P119_5', 'P119_6',
+                    'P122', 'P122_NO', 'P124', 'P124_NO', 'P126', 'P127', 'P128', 'P129',
+                    'P130', 'P131', 'P132', 'P133', 'P135', 'P136', 'P137', 'P139', 'P140'
+                    )
+selected_var_1 <- c('P101', 'P104_1', 'P112', 'P126', 'P136')
+```
+
+* Creamos la base `pob_pen_sel`
+
+```{r select variables}
+pob_pen_sel <- pob_pen_raw |>
+  select(selected_var_2)
+```
+
+
+```{r}
+#sjPlot::view_df(pob_pen_raw_2)
+#sjPlot::view_df(pob_pen_sel)
+
+```
+
+
+### Características de la base de datos
+
+
+* Exploramos los tipos de variables:
+
+```{r}
+glimpse(pob_pen_sel)
+```
+
+Nuestras variables no cuentan aún con un **formato adecuado**. Además, contienen objetos de etiqueta <dbl+lbl> tanto para el nombre como para los valores de la variable.
+
+* Exploramos si nuestra base de datos cuenta con **valores perdidos**
+
+```{r, missing values}
+pob_pen_sel |> 
+  summarise(across(.cols = selected_var_2,
+                   .fns = ~ sum(is.na(.x)),
+                   .names = "NA_{col}")) |> 
+  glimpse()
+
+```
+
+Como podemos ver parte de nuestras variables contienen valores perdidos. En algunos casos esto reside en la naturaleza de la pregunta. 
+
+
+* Presentamos la información contenida en las **etiquetas** de las variables
+
+```{r echo=FALSE}
+pob_pen_sel |> 
+  summarise(across(.cols = selected_var_2,
+                   .fns = ~ get_label(.x))) |> 
+  pivot_longer(cols= everything(), 
+               names_to = "variables", 
+               values_to = "etiquetas_variables")
+# puede resultar más rápido utilizar la función sjPlot::view_df(ide) del paquete sjPlot
+```
+
+
+
+### Limpieza de la base de datos
+
++ En primer lugar, reemplazamos los valores de la variable con las etiquetas de los mismos para nuestras `selected_var`. Guardaos el resultado en el objeto `sel_clean`
+
+```{r}
+sel_clean <- pob_pen_sel  |> 
+  # Cambiamos los valores para todas las variables seleccionadas a partir de sus etiquetas
+  mutate(across(.cols = selected_var_2,
+                .fns = ~ as_label(.x))) |> 
+  # Limpiamos los valores 
+  mutate(across(.cols = selected_var_2,
+                .fns = ~ str_replace_all(.x, "\\?", "" )))
+head(sel_clean)
+
+```
+
+
+## Análisis Exploratorio
+
+### Análisis descriptivo principales variables
+
+* Realizamos una análisis exploratorio de la variable P101: `r get_label(sel_clean$P101)`
+
+
+  + En primer lugar, pedimos una tabla de las respuestas a esta pregunta
+  
+```{r}
+t_p101<- sel_clean |> 
+  count(P101, sort = TRUE) |> 
+  mutate(pct = round((n/sum(n))*100, digits = 2))
+t_p101
+ 
+```
+
+  + Luego, representamos los resultados en un gráfico de barras
+  
+```{r}
+t_p101 |> 
+  ggplot(aes(x= fct_reorder(P101, pct), y = pct, fill = P101)) +
+  geom_col() +
+  coord_flip()
+# fct_recode
+```
+
+
+### Escribiendo una función para las variables seleccionadas
+
+Podemos replicar los mismos pasos aplicados a la pregunta `P101` mediante una función
+
+```{r}
+eda <- function(data, group_col){
+  
+  data |> 
+    group_by_(.dots = lazyeval::lazy(group_col)) |> summarize(count = n()) |> 
+    mutate(percent = round((count / sum(count)) * 100, digits = 2)) |> 
+    arrange(desc(count)) |> 
+    drop_na()
+  
+}
+
+```
+
+### Características personales
+
+* Aquí presentamos algunas tablas que resumen las variables de interés
+
+```{r}
+sel_clean |> 
+  eda(P104_1)
+```
+
+
+```{r}
+sel_clean |> 
+  eda(DD)
+```
+
+
+```{r}
+sel_clean |> 
+  eda(GENERO)
+```
+
+
+```{r}
+sel_clean |> 
+  eda(NACIONALIDAD)
+```
+
+* Podemos hacer un loop sobre todas nuestras variables con la función `eda` creada para el análisis exploratorio
+
+```{r}
+output = list()
+for(i in 1:length(names(sel_clean))){
+  output[[i]] <- sel_clean |> 
+    eda(sel_clean[i])
+}
+```
+
+Los resultados están guardados en el `objeto` output. Podemos imprimirlos a través de otro for loop
+
+```{r}
+output[[41]]
+```
+
+
+
+```{r}
+for (j in 1:length(output)){
+  print(output[[j]])
+}
+```
+
+
+
